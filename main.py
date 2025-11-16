@@ -1,7 +1,9 @@
 import os
 import logging
+import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta
+
 from telegram import Update, BotCommand
 from telegram.ext import (
     Application,
@@ -13,6 +15,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+import uvicorn
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -25,12 +28,8 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", 10000))
 
 # === VALIDATE ===
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is missing!")
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY is missing!")
-if not WEBHOOK_URL:
-    raise ValueError("WEBHOOK_URL is missing!")
+if not all([BOT_TOKEN, OPENAI_API_KEY, WEBHOOK_URL]):
+    raise ValueError("Missing BOT_TOKEN, OPENAI_API_KEY, or WEBHOOK_URL in env!")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
@@ -51,21 +50,21 @@ def is_rate_limited(user_id: int) -> bool:
 
 async def stream_response(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str, chat_id: int):
     if is_rate_limited(update.effective_user.id):
-        await update.message.reply_text("Slow down! 3 messages / 30s", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("⏳ Slow down! 3 messages / 30s", parse_mode=ParseMode.MARKDOWN)
         return
 
     chat_memory[chat_id].append({"role": "user", "content": prompt})
     if len(chat_memory[chat_id]) > MAX_MEMORY:
         chat_memory[chat_id] = chat_memory[chat_id][-MAX_MEMORY:]
 
-    msg = await update.message.reply_text("Thinking...", parse_mode=ParseMode.MARKDOWN)
+    msg = await update.message.reply_text("🤖 Thinking...", parse_mode=ParseMode.MARKDOWN)
     full_response = ""
 
     try:
         stream = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful AI. Keep replies short."}
+                {"role": "system", "content": "You are a helpful AI. Keep replies short and clear."}
             ] + [{"role": m["role"], "content": m["content"]} for m in chat_memory[chat_id]],
             stream=True,
             temperature=0.7,
@@ -74,19 +73,20 @@ async def stream_response(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
         async for chunk in stream:
             if chunk.choices[0].delta.content:
                 full_response += chunk.choices[0].delta.content
-                if len(full_response) % 8 == 0:
-                    await msg.edit_text(f"{full_response}...", parse_mode=ParseMode.MARKDOWN)
+                if len(full_response) % 10 == 0:
+                    await msg.edit_text(f"🤖 {full_response}...", parse_mode=ParseMode.MARKDOWN)
 
-        await msg.edit_text(full_response, parse_mode=ParseMode.MARKDOWN)
+        await msg.edit_text(f"🤖 {full_response}", parse_mode=ParseMode.MARKDOWN)
         chat_memory[chat_id].append({"role": "assistant", "content": full_response})
 
     except Exception as e:
         logger.error(f"OpenAI Error: {e}")
-        await msg.edit_text("AI error. Try again.", parse_mode=ParseMode.MARKDOWN)
+        await msg.edit_text("❌ AI error. Try again.", parse_mode=ParseMode.MARKDOWN)
 
+# === HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "*ProHybrid AI* — ChatGPT in Telegram\n\n"
+        "🤖 *ProHybrid AI* — ChatGPT in Telegram\n\n"
         "• DM me: full chat\n"
         "• Groups: @me or /ask\n"
         "• Free • Fast • Smart",
@@ -121,27 +121,26 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("ask", ask_command))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-# === SET COMMANDS ===
-await app.bot.set_my_commands([
-    BotCommand("start", "Start bot"),
-    BotCommand("ask", "Ask AI in group")
-])
+# === SET COMMANDS AFTER START ===
+async def post_init(application: Application) -> None:
+    await application.bot.set_my_commands([
+        BotCommand("start", "Start the bot"),
+        BotCommand("ask", "Ask AI in group")
+    ])
+    logger.info("Bot commands set.")
 
-# === RUN WEBHOOK ===
-if __name__ == "__main__":
-    import uvicorn
-    # Set webhook FIRST
-    async def set_webhook():
+app.post_init = post_init
+
+# === SET WEBHOOK & RUN ===
+async def set_webhook():
+    try:
         await app.bot.set_webhook(url=WEBHOOK_URL)
         logger.info(f"Webhook set to {WEBHOOK_URL}")
+    except Exception as e:
+        logger.error(f"Webhook failed: {e}")
 
-    import asyncio
+if __name__ == "__main__":
+    # Run webhook setup
     asyncio.run(set_webhook())
-
-    # Then run server
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=PORT,
-        log_level="info"
-    )
+    # Run server
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, log_level="info")
