@@ -46,14 +46,14 @@ def is_rate_limited(user_id: int) -> bool:
 
 async def stream_response(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str, chat_id: int):
     if is_rate_limited(update.effective_user.id):
-        await update.message.reply_text("⏳ Slow down! 3 messages / 30s", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("Slow down! 3 messages / 30s", parse_mode=ParseMode.MARKDOWN)
         return
 
     chat_memory[chat_id].append({"role": "user", "content": prompt})
     if len(chat_memory[chat_id]) > MAX_MEMORY:
         chat_memory[chat_id] = chat_memory[chat_id][-MAX_MEMORY:]
 
-    msg = await update.message.reply_text("🤖 Thinking...", parse_mode=ParseMode.MARKDOWN)
+    msg = await update.message.reply_text("Thinking...", parse_mode=ParseMode.MARKDOWN)
     full_response = ""
 
     try:
@@ -70,18 +70,18 @@ async def stream_response(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             if chunk.choices[0].delta.content:
                 full_response += chunk.choices[0].delta.content
                 if len(full_response) % 8 == 0:
-                    await msg.edit_text(f"🤖 {full_response}...", parse_mode=ParseMode.MARKDOWN)
+                    await msg.edit_text(f"{full_response}...", parse_mode=ParseMode.MARKDOWN)
 
-        await msg.edit_text(f"🤖 {full_response}", parse_mode=ParseMode.MARKDOWN)
+        await msg.edit_text(full_response, parse_mode=ParseMode.MARKDOWN)
         chat_memory[chat_id].append({"role": "assistant", "content": full_response})
 
     except Exception as e:
         logger.error(f"OpenAI Error: {e}")
-        await msg.edit_text("❌ AI error. Try again.", parse_mode=ParseMode.MARKDOWN)
+        await msg.edit_text("AI error. Try again.", parse_mode=ParseMode.MARKDOWN)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *ProHybrid AI* — ChatGPT in Telegram\n\n"
+        "*ProHybrid AI* — ChatGPT in Telegram\n\n"
         "• DM me: full chat\n"
         "• Groups: @me or /ask\n"
         "• Free • Fast • Smart",
@@ -108,24 +108,23 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if clean_text:
             await stream_response(update, context, clean_text, chat.id)
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+# === CREATE APP ===
+app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ask", ask_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("ask", ask_command))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    app.bot.set_my_commands([
-        BotCommand("start", "Start bot"),
-        BotCommand("ask", "Ask AI in group")
-    ])
+app.bot.set_my_commands([
+    BotCommand("start", "Start bot"),
+    BotCommand("ask", "Ask AI in group")
+])
 
+# === RUN WEBHOOK ===
+if __name__ == "__main__":
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path="/webhook",
         webhook_url=WEBHOOK_URL
     )
-
-if __name__ == "__main__":
-    main()
