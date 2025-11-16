@@ -24,8 +24,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", 10000))
 
-if not BOT_TOKEN or not OPENAI_API_KEY:
-    raise ValueError("Missing BOT_TOKEN or OPENAI_API_KEY")
+# === VALIDATE ===
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN is missing!")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY is missing!")
+if not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL is missing!")
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
@@ -103,28 +108,40 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     bot = await context.bot.get_me()
-    if f"@{bot.username}" in text or bot.username.lower() in text.lower():
-        clean_text = text.replace(f"@{bot.username}", "").strip()
+    mention = f"@{bot.username}"
+    if mention in text or bot.username.lower() in text.lower():
+        clean_text = text.replace(mention, "").strip()
         if clean_text:
             await stream_response(update, context, clean_text, chat.id)
 
-# === CREATE APP ===
+# === BUILD APP ===
 app = Application.builder().token(BOT_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("ask", ask_command))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-app.bot.set_my_commands([
+# === SET COMMANDS ===
+await app.bot.set_my_commands([
     BotCommand("start", "Start bot"),
     BotCommand("ask", "Ask AI in group")
 ])
 
 # === RUN WEBHOOK ===
 if __name__ == "__main__":
-    app.run_webhook(
-        listen="0.0.0.0",
+    import uvicorn
+    # Set webhook FIRST
+    async def set_webhook():
+        await app.bot.set_webhook(url=WEBHOOK_URL)
+        logger.info(f"Webhook set to {WEBHOOK_URL}")
+
+    import asyncio
+    asyncio.run(set_webhook())
+
+    # Then run server
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
         port=PORT,
-        url_path="/webhook",
-        webhook_url=WEBHOOK_URL
+        log_level="info"
     )
